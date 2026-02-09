@@ -80,6 +80,8 @@ The workflows need these GitHub Actions permissions (already configured):
 
 Based on the contribution workflow from [pi-mono](https://github.com/badlogic/pi-mono).
 
+Thanks to [@badlogicgames](https://github.com/badlogicgames) and the amazing people of [pi](https://github.com/badlogic/pi-mono) for pioneering this elegant solution to the AI slop PR problem. 🙏
+
 ## License
 
 MIT
