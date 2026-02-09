@@ -1,0 +1,27 @@
+# Contributing
+
+Thanks for wanting to contribute!
+
+## First-Time Contributors
+
+We use an approval gate for new contributors:
+
+1. **Open an issue** describing what you want to change and why
+2. Keep it concise and write in your own voice
+3. A maintainer will comment `lgtm` if approved
+4. Once approved, you can submit PRs
+
+This exists to ensure quality contributions and avoid wasted effort on both sides.
+
+## Submitting a PR
+
+Once you're approved:
+
+1. Fork the repo
+2. Create a branch for your changes
+3. Make your changes
+4. Submit a PR
+
+## Questions?
+
+Open an issue!
