@@ -1,0 +1,309 @@
+name: Triage Issues (AI-Powered)
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to triage'
+        required: true
+        type: number
+
+# Configure actions for each classification + confidence combination
+# Format: "action" or "action:min_confidence"
+# Actions: "ignore", "comment", "close", "comment_and_close", "label"
+# Confidence: "high", "medium", "low"
+#
+# Examples:
+#   "comment_and_close"        → always comment and close
+#   "comment_and_close:high"   → only if confidence is high
+#   "comment:medium,close:high" → comment if medium+, close only if high
+#   "label,comment:high"       → always label, comment only if high
+#
+env:
+  # Actions per classification (comma-separated rules)
+  ACTION_SUPPORT: "label,comment_and_close:high,comment:medium"
+  ACTION_BUG: "ignore"
+  ACTION_FEATURE: "label"
+  ACTION_UNCLEAR: "label,comment"
+  
+  # Labels to add for each classification (comma-separated)
+  LABELS_SUPPORT: "support,auto-triaged"
+  LABELS_BUG: ""
+  LABELS_FEATURE: "enhancement,auto-triaged"
+  LABELS_UNCLEAR: "needs-info,auto-triaged"
+  
+  # Custom prompt (optional - leave empty to use default)
+  # Supports placeholders: {{title}}, {{body}}, {{extra_instructions}}
+  CUSTOM_PROMPT: ""
+  
+  # Additional prompt instructions (appended to default prompt)
+  EXTRA_INSTRUCTIONS: ""
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install @mariozechner/pi-coding-agent tsx
+
+      - name: Get issue details
+        id: issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let issue;
+            if (context.eventName === 'workflow_dispatch') {
+              const { data } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ inputs.issue_number || 0 }}
+              });
+              issue = data;
+            } else {
+              issue = context.payload.issue;
+            }
+            core.setOutput('title', issue.title);
+            core.setOutput('body', issue.body || '');
+            core.setOutput('number', issue.number);
+            core.setOutput('author', issue.user.login);
+
+      - name: Analyze issue with AI
+        id: triage
+        env:
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_BODY: ${{ steps.issue.outputs.body }}
+          CUSTOM_PROMPT: ${{ env.CUSTOM_PROMPT }}
+          EXTRA_INSTRUCTIONS: ${{ env.EXTRA_INSTRUCTIONS }}
+          # API keys - add whichever you use
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: npx tsx .github/scripts/triage-issue.ts
+
+      - name: Determine actions
+        id: actions
+        uses: actions/github-script@v7
+        env:
+          CLASSIFICATION: ${{ steps.triage.outputs.classification }}
+          CONFIDENCE: ${{ steps.triage.outputs.confidence }}
+          ACTION_SUPPORT: ${{ env.ACTION_SUPPORT }}
+          ACTION_BUG: ${{ env.ACTION_BUG }}
+          ACTION_FEATURE: ${{ env.ACTION_FEATURE }}
+          ACTION_UNCLEAR: ${{ env.ACTION_UNCLEAR }}
+          LABELS_SUPPORT: ${{ env.LABELS_SUPPORT }}
+          LABELS_BUG: ${{ env.LABELS_BUG }}
+          LABELS_FEATURE: ${{ env.LABELS_FEATURE }}
+          LABELS_UNCLEAR: ${{ env.LABELS_UNCLEAR }}
+        with:
+          script: |
+            const classification = process.env.CLASSIFICATION;
+            const confidence = process.env.CONFIDENCE;
+            
+            // Confidence hierarchy: high > medium > low
+            const confidenceMeetsMinimum = (actual, minimum) => {
+              const levels = { low: 1, medium: 2, high: 3 };
+              return levels[actual] >= levels[minimum];
+            };
+            
+            // Get action config for this classification
+            const actionConfigs = {
+              support: process.env.ACTION_SUPPORT,
+              bug: process.env.ACTION_BUG,
+              feature: process.env.ACTION_FEATURE,
+              unclear: process.env.ACTION_UNCLEAR
+            };
+            
+            const labelConfigs = {
+              support: process.env.LABELS_SUPPORT,
+              bug: process.env.LABELS_BUG,
+              feature: process.env.LABELS_FEATURE,
+              unclear: process.env.LABELS_UNCLEAR
+            };
+            
+            const actionConfig = actionConfigs[classification] || 'ignore';
+            const labels = labelConfigs[classification] || '';
+            
+            // Parse action rules: "action:confidence,action2:confidence2"
+            const rules = actionConfig.split(',').map(r => r.trim());
+            
+            const shouldDoAction = (actionName) => {
+              for (const rule of rules) {
+                const [action, minConfidence] = rule.split(':').map(s => s.trim());
+                if (action === actionName) {
+                  // If no confidence specified, always do it
+                  if (!minConfidence) return true;
+                  // Otherwise check if confidence meets minimum
+                  return confidenceMeetsMinimum(confidence, minConfidence);
+                }
+              }
+              return false;
+            };
+            
+            const doLabel = shouldDoAction('label');
+            const doComment = shouldDoAction('comment') || shouldDoAction('comment_and_close');
+            const doClose = shouldDoAction('close') || shouldDoAction('comment_and_close');
+            
+            console.log(`Classification: ${classification}, Confidence: ${confidence}`);
+            console.log(`Action config: ${actionConfig}`);
+            console.log(`Will label: ${doLabel}, Will comment: ${doComment}, Will close: ${doClose}`);
+            
+            core.setOutput('do_label', doLabel ? 'true' : 'false');
+            core.setOutput('do_comment', doComment ? 'true' : 'false');
+            core.setOutput('do_close', doClose ? 'true' : 'false');
+            core.setOutput('labels', labels);
+
+      - name: Apply labels
+        if: steps.actions.outputs.do_label == 'true' && steps.actions.outputs.labels != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = '${{ steps.actions.outputs.labels }}'.split(',').map(l => l.trim()).filter(Boolean);
+            if (labels.length === 0) return;
+            
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ steps.issue.outputs.number }},
+                labels
+              });
+              console.log(`Added labels: ${labels.join(', ')}`);
+            } catch (e) {
+              console.log('Could not add labels (they may not exist):', e.message);
+            }
+
+      - name: Post comment
+        if: steps.actions.outputs.do_comment == 'true'
+        uses: actions/github-script@v7
+        env:
+          CLASSIFICATION: ${{ steps.triage.outputs.classification }}
+          CONFIDENCE: ${{ steps.triage.outputs.confidence }}
+          REASON: ${{ steps.triage.outputs.reason }}
+          AUTHOR: ${{ steps.issue.outputs.author }}
+          WILL_CLOSE: ${{ steps.actions.outputs.do_close }}
+        with:
+          script: |
+            const classification = process.env.CLASSIFICATION;
+            const confidence = process.env.CONFIDENCE;
+            const reason = process.env.REASON;
+            const author = process.env.AUTHOR;
+            const willClose = process.env.WILL_CLOSE === 'true';
+            
+            let message;
+            
+            if (classification === 'support') {
+              message = [
+                `Hi @${author}, thanks for reaching out!`,
+                '',
+                `This issue appears to be a support question rather than a bug report.`,
+                '',
+                `> ${reason}`,
+                '',
+                '**For support questions, please use:**',
+                '- 💬 [GitHub Discussions](../discussions) (preferred)',
+                '- 📖 Check our [documentation](../wiki) or README',
+                '- 🔍 Search [existing issues](../issues?q=is%3Aissue) - your question may already be answered',
+                '',
+                willClose ? '**If this IS a bug report**, please reopen this issue and include:' : '**To help us better assist you**, please provide:',
+                '- Steps to reproduce the problem',
+                '- Expected vs actual behavior',
+                '- Version/commit you\'re using',
+                '- Any error messages or logs',
+                '',
+                '---',
+                `*Triaged by AI (${confidence} confidence). If this was a mistake, ${willClose ? 'reopen this issue' : 'let us know'}.*`
+              ].join('\n');
+            } else if (classification === 'unclear') {
+              message = [
+                `Hi @${author}, thanks for opening this issue!`,
+                '',
+                `We need a bit more information to help you effectively.`,
+                '',
+                `> ${reason}`,
+                '',
+                '**Please provide:**',
+                '- What you\'re trying to do',
+                '- What actually happens (error messages, unexpected behavior)',
+                '- Steps to reproduce the problem',
+                '- Version/environment info',
+                '',
+                '---',
+                `*Triaged by AI (${confidence} confidence).*`
+              ].join('\n');
+            } else if (classification === 'feature') {
+              message = [
+                `Hi @${author}, thanks for the feature suggestion!`,
+                '',
+                `> ${reason}`,
+                '',
+                'We\'ve labeled this as an enhancement request. A maintainer will review it when possible.',
+                '',
+                '---',
+                `*Triaged by AI (${confidence} confidence).*`
+              ].join('\n');
+            } else {
+              message = [
+                `Thanks for the bug report, @${author}!`,
+                '',
+                `> ${reason}`,
+                '',
+                'A maintainer will look into this.',
+                '',
+                '---',
+                `*Triaged by AI (${confidence} confidence).*`
+              ].join('\n');
+            }
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.issue.outputs.number }},
+              body: message
+            });
+
+      - name: Close issue
+        if: steps.actions.outputs.do_close == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.issue.outputs.number }},
+              state: 'closed',
+              state_reason: 'not_planned'
+            });
+
+      - name: Summary
+        run: |
+          echo "## Issue Triage Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Issue | #${{ steps.issue.outputs.number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Classification | ${{ steps.triage.outputs.classification }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Confidence | ${{ steps.triage.outputs.confidence }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Reason | ${{ steps.triage.outputs.reason }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Actions Taken" >> $GITHUB_STEP_SUMMARY
+          echo "- Labels: ${{ steps.actions.outputs.do_label }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Comment: ${{ steps.actions.outputs.do_comment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Close: ${{ steps.actions.outputs.do_close }}" >> $GITHUB_STEP_SUMMARY
