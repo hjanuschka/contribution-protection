@@ -238,7 +238,7 @@ The workflows need these GitHub Actions permissions (already configured):
 
 - Based on the contribution workflow from [pi-mono](https://github.com/badlogic/pi-mono)
 - AI triage powered by [pi-core SDK](https://github.com/badlogic/pi-mono)
-- Inspired by feedback from [@ryanprime](https://github.com/ryanprime) on handling support issues
+- Inspired by feedback from [@ryanrhughes](https://github.com/ryanrhughes) on handling support issues
 
 Thanks to [@badlogicgames](https://github.com/badlogicgames) and the pi community! 🙏
 
